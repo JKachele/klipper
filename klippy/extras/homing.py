@@ -6,6 +6,7 @@
 import logging, math
 
 HOMING_START_DELAY = 0.001
+PROBE_SETTLING_TIME = 0.1
 ENDSTOP_SAMPLE_TIME = .000015
 ENDSTOP_SAMPLE_COUNT = 4
 
@@ -252,19 +253,27 @@ class PrinterHoming:
                 raise self.printer.command_error(
                     "Homing failed due to printer shutdown")
             raise
-    def probing_move(self, mcu_probe, pos, speed):
+    def probing_move(self, mcu_probe, pos, speed, probe_retries=4):
+        gcode = self.printer.lookup_object('gcode')
         endstops = [(mcu_probe, "probe")]
         hmove = HomingMove(self.printer, endstops)
-        try:
-            epos = hmove.homing_move(pos, speed, probe_pos=True)
-        except self.printer.command_error:
-            if self.printer.is_shutdown():
+        retries = 0
+        while True:
+            try:
+                epos = hmove.homing_move(pos, speed, probe_pos=True)
+            except self.printer.command_error:
+                if self.printer.is_shutdown():
+                    raise self.printer.command_error(
+                        "Probing failed due to printer shutdown")
+                raise
+            if hmove.check_no_movement() is None:
+                break;
+            if retries >= probe_retries:
                 raise self.printer.command_error(
-                    "Probing failed due to printer shutdown")
-            raise
-        if hmove.check_no_movement() is not None:
-            raise self.printer.command_error(
-                "Probe triggered prior to movement")
+                    "Probe triggered prior to movement")
+            gcode.respond_info("Waiting for probe to settle")
+            self.printer.lookup_object('toolhead').dwell(PROBE_SETTLING_TIME)
+            retries += 1
         return epos
     def cmd_G28(self, gcmd):
         # Move to origin
